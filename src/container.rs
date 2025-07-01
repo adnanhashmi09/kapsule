@@ -8,6 +8,15 @@ use nix::{
 pub fn container(args: &[String]) {
     sethostname("container_masti");
 
+    // Make / private to prevent mount propagation to parent
+    mount::<str, str, str, str>(
+        Some("none"),
+        "/",
+        None,
+        MsFlags::MS_PRIVATE | MsFlags::MS_REC,
+        None,
+    )
+    .expect("Failed to mount private root");
     chroot("/ubuntu-fs").expect("Failed to chroot");
     let root = Path::new("/");
     std::env::set_current_dir(&root).expect("failed to chdir");

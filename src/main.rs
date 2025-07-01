@@ -1,44 +1,36 @@
 #![cfg(target_os = "linux")]
-use std::{
-    env,
-    os::unix::{fs::chroot, process::CommandExt},
-    path::Path,
-    process::{exit, Command},
-};
-
-use nix::{
-    libc::SIGCHLD,
-    mount::{mount, umount, MntFlags, MsFlags},
-    sched::{clone, unshare, CloneFlags},
-    sys::wait::WaitPidFlag,
-    unistd::sethostname,
-};
+use std::{env, process::exit};
 
 mod container;
+mod errors;
 mod run;
-use container::container;
+
+use errors::{EXIT_INSUFFICIENT_ARGS, EXIT_INVALID_ARG};
 use run::run;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    println!("{}", args[0]);
     if args.len() < 2 {
         println!("Please provide a command");
-        exit(1);
+        exit(EXIT_INSUFFICIENT_ARGS);
     }
 
     match args[1].as_str() {
         "run" => run(),
-        // "child" => container(),
         _ => {
             println!("'{}' not a valid command", args[1]);
-            exit(1);
+            exit(EXIT_INVALID_ARG);
         }
     }
 }
 
 #[cfg(not(target_os = "linux"))]
+mod errors;
+
+#[cfg(not(target_os = "linux"))]
 fn main() {
+    use errors::EXIT_UNSUPPORTED_PLATFORM;
+
     println!("Kapsule is only supported on Linux");
-    std::process::exit(1);
+    std::process::exit(EXIT_UNSUPPORTED_PLATFORM);
 }
