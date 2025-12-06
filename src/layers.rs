@@ -293,7 +293,7 @@ impl ContainerImageFetcher {
     }
 
     async fn _fetch_layer(&self, layer: &ImageMedia, pb: ProgressBar) -> Result<()> {
-        // # TODO: Fetch layers that have already been fetched
+        // # TODO: Dont fetch layers that have already been fetched
         let digest = layer.digest.clone();
         pb.set_message(format!("Downloading {}", layer.digest));
 
