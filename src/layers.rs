@@ -10,7 +10,7 @@ use crate::{
     sys::{arch, sysinfo},
 };
 
-use anyhow::{Context, Error, Ok, Result};
+use anyhow::{anyhow, bail, Context, Error, Result};
 use flate2::read::GzDecoder;
 use futures_util::{future::join_all, StreamExt};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -33,9 +33,18 @@ impl ContainerImageFetcher {
     pub async fn new(image: &str) -> Result<Self> {
         let (namespace, image_name) = image.split_once('/').unwrap_or(("library", image));
         let (image_name, image_tag) = image.split_once(':').unwrap_or((image_name, "latest"));
-        let http_client = Client::new();
-        let token =
-            Self::fetch_and_set_anonymous_token(&http_client, &namespace, &image_name).await?;
+        let http_client = Client::builder()
+            .timeout(Duration::from_secs(600))
+            .connect_timeout(Duration::from_secs(30))
+            .pool_idle_timeout(Duration::from_secs(90))
+            .build()?;
+
+        let token = Self::fetch_and_set_anonymous_token(&http_client, &namespace, &image_name)
+            .await
+            .context(format!(
+                "Failed to authenticate with Docker registry for {}/{}",
+                namespace, image_name
+            ))?;
 
         Ok(Self {
             client: http_client,
@@ -61,15 +70,20 @@ impl ContainerImageFetcher {
                 ),
             ])
             .send()
-            .await?
-            .error_for_status()?;
+            .await
+            .context("Failed to send authentication request to Docker registry")?
+            .error_for_status()
+            .context("Docker registry returned error status for authentication")?;
 
-        let json_value: Value = response.json().await?;
+        let json_value: Value = response
+            .json()
+            .await
+            .context("Failed to parse authentication response as JSON")?;
 
         let token = json_value
             .get("token")
             .and_then(|v| v.as_str())
-            .expect("Token not found in the response returned by docker auth api.");
+            .ok_or_else(|| anyhow!("Token field missing or invalid in authentication response"))?;
 
         Ok(token.to_string())
     }
@@ -87,10 +101,21 @@ impl ContainerImageFetcher {
             )
             .header("Authorization", format!("Bearer {}", self.token))
             .send()
-            .await?
-            .error_for_status()?;
+            .await
+            .context(format!(
+                "Failed to fetch manifest for {}:{}",
+                self.image_name, self.image_tag
+            ))?
+            .error_for_status()
+            .context(format!(
+                "Registry returned error for {}:{}",
+                self.image_name, self.image_tag
+            ))?;
 
-        let json_response: Value = response.json().await?;
+        let json_response: Value = response
+            .json()
+            .await
+            .context("Failed to parse manifest index as JSON")?;
 
         Ok(json_response)
     }
@@ -108,10 +133,21 @@ impl ContainerImageFetcher {
             )
             .header("Authorization", format!("Bearer {}", self.token))
             .send()
-            .await?
-            .error_for_status()?;
+            .await
+            .context(format!(
+                "Failed to fetch platform manifest for digest {}",
+                digest
+            ))?
+            .error_for_status()
+            .context(format!(
+                "Registry returned error for platform manifest {}",
+                digest
+            ))?;
 
-        let json_response: Value = response.json().await?;
+        let json_response: Value = response
+            .json()
+            .await
+            .context("Failed to parse platform manifest as JSON")?;
 
         Ok(json_response)
     }
@@ -126,14 +162,15 @@ impl ContainerImageFetcher {
             .header("Authorization", format!("Bearer {}", self.token))
             .header("Accept", media_type)
             .send()
-            .await?
-            .error_for_status()?;
+            .await
+            .context(format!("Failed to fetch blob {}", digest))?
+            .error_for_status()
+            .context(format!("Registry returned error for blob {}", digest))?;
 
         Ok(response)
     }
 
     pub async fn fetch_image(&self) -> Result<()> {
-        // TODO: Better error handling here
         let sysinfo = sysinfo::get_platform_information()?;
 
         let arch = sysinfo.machine.to_string();
@@ -168,7 +205,7 @@ impl ContainerImageFetcher {
             .collect();
 
         let platform_specific_manifest_digest = match host_arch_manifest.len() {
-            0 => return Err(anyhow::anyhow!("No manifest found for the host arch.")),
+            0 => bail!("No manifest found for the host arch."),
             1 => self.extract_digest_from_manifest(host_arch_manifest[0])?,
             _ => {
                 let host_arch_variant_manifest = host_arch_manifest.iter().find(|manifest| {
@@ -216,15 +253,47 @@ impl ContainerImageFetcher {
             self.fetch_layer(layer, pb)
         });
 
-        join_all(fetchers)
+        let errors: Vec<_> = join_all(fetchers)
             .await
             .into_iter()
-            .collect::<Result<Vec<_>>>()?;
+            .filter_map(|r| r.err())
+            .collect();
+
+        if !errors.is_empty() {
+            bail!("Failed to fetch {} layer(s): {:?}", errors.len(), errors);
+        }
 
         Ok(())
     }
 
     async fn fetch_layer(&self, layer: &ImageMedia, pb: ProgressBar) -> Result<()> {
+        const MAX_RETRIES: u32 = 3;
+
+        for attempt in 1..=MAX_RETRIES {
+            match self._fetch_layer(layer, pb.clone()).await {
+                Ok(_) => return Ok(()),
+                Err(e) if attempt < MAX_RETRIES => {
+                    pb.set_message(format!(
+                        "Retry {}/{} for {}",
+                        attempt, MAX_RETRIES, &layer.digest
+                    ));
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    continue;
+                }
+                Err(e) => {
+                    pb.finish_with_message(format!(
+                        "✗ Failed {} after {} retries",
+                        &layer.digest, MAX_RETRIES
+                    ));
+                    return Err(e);
+                }
+            }
+        }
+        unreachable!()
+    }
+
+    async fn _fetch_layer(&self, layer: &ImageMedia, pb: ProgressBar) -> Result<()> {
+        // # TODO: Fetch layers that have already been fetched
         let digest = layer.digest.clone();
         pb.set_message(format!("Downloading {}", layer.digest));
 
@@ -238,35 +307,40 @@ impl ContainerImageFetcher {
             byte_stream.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
         }));
 
-        let digest = layer.digest.clone();
+        let digest_for_closure = layer.digest.clone();
         let output_dir: PathBuf = ["./extracted_layers", &digest].iter().collect();
 
-        spawn_blocking(move || {
-            pb.set_message(format!("Extracting {}", digest));
+        spawn_blocking(move || -> Result<()> {
+            pb.set_message(format!("Extracting {}", &digest_for_closure));
 
             let sync_reader = SyncIoBridge::new(async_stream);
             let gz_decoder = GzDecoder::new(sync_reader);
             let mut archive = Archive::new(gz_decoder);
             create_dir_all(&output_dir).context("Failed to create output directory")?;
-            archive
-                .unpack(&output_dir)
-                .context("Failed to extract tar archive")?;
 
-            // println!("Layer extracted to: {}", &output_dir.display());
-            pb.finish_with_message(format!("Done {}", digest));
-            Ok(())
+            match archive.unpack(&output_dir) {
+                Ok(_) => {
+                    pb.finish_with_message(format!("Done {}", &digest_for_closure));
+                    Ok(())
+                }
+                Err(e) => Err(e).context(format!(
+                    "Failed to extract layer {} to {:?}",
+                    &digest_for_closure, output_dir
+                )),
+            }
         })
-        .await?;
+        .await
+        .context("Layer extraction task panicked")?
+        .context(format!("Failed to extract layer {}", &digest))?;
 
         Ok(())
     }
 
     fn extract_digest_from_manifest(&self, manifest: &Value) -> Result<String> {
-        let digest = manifest
+        manifest
             .get("digest")
             .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("Cannot extract manifest from digest"))?;
-
-        return Ok(digest.to_owned());
+            .map(String::from)
+            .ok_or_else(|| anyhow!("Cannot extract manifest from digest"))
     }
 }
