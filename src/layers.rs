@@ -1,6 +1,10 @@
 pub mod manifests;
 
-use std::{fs::create_dir_all, path::PathBuf, time::Duration};
+use std::{
+    fs::{self, create_dir_all},
+    path::PathBuf,
+    time::Duration,
+};
 
 use crate::{
     layers::manifests::{
@@ -274,7 +278,7 @@ impl ContainerImageFetcher {
                 Ok(_) => return Ok(()),
                 Err(e) if attempt < MAX_RETRIES => {
                     pb.set_message(format!(
-                        "Retry {}/{} for {}",
+                        "🔄 Retry {}/{} for {}",
                         attempt, MAX_RETRIES, &layer.digest
                     ));
                     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -282,7 +286,7 @@ impl ContainerImageFetcher {
                 }
                 Err(e) => {
                     pb.finish_with_message(format!(
-                        "✗ Failed {} after {} retries",
+                        "❌ Failed {} after {} retries",
                         &layer.digest, MAX_RETRIES
                     ));
                     return Err(e);
@@ -293,9 +297,28 @@ impl ContainerImageFetcher {
     }
 
     async fn _fetch_layer(&self, layer: &ImageMedia, pb: ProgressBar) -> Result<()> {
-        // # TODO: Dont fetch layers that have already been fetched
+        // TODO: the extracted layers should be put in a directory like etc/ or opt/
         let digest = layer.digest.clone();
-        pb.set_message(format!("Downloading {}", layer.digest));
+
+        let digest_for_closure = layer.digest.clone();
+        let output_dir: PathBuf = ["./extracted_layers", &digest].iter().collect();
+
+        let marker_file = output_dir.join("..").join(format!("{}.mrk", &digest));
+        if marker_file.exists() {
+            pb.finish_with_message(format!("✅ Found cached layer {}", &digest));
+            return Ok(());
+        }
+
+        if output_dir.exists() {
+            pb.set_message(format!("🧹 Cleaning up incomplete extraction {}", &digest));
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            fs::remove_dir_all(&output_dir).context(format!(
+                "Failed to remove incomplete extraction at {:?}",
+                output_dir
+            ))?;
+        }
+
+        pb.set_message(format!("⬇️ Downloading {}", layer.digest));
 
         let resp = self
             .fetch_manifest_blob(&layer.digest, &layer.media_type)
@@ -307,11 +330,8 @@ impl ContainerImageFetcher {
             byte_stream.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
         }));
 
-        let digest_for_closure = layer.digest.clone();
-        let output_dir: PathBuf = ["./extracted_layers", &digest].iter().collect();
-
         spawn_blocking(move || -> Result<()> {
-            pb.set_message(format!("Extracting {}", &digest_for_closure));
+            pb.set_message(format!("📦 Extracting {}", &digest_for_closure));
 
             let sync_reader = SyncIoBridge::new(async_stream);
             let gz_decoder = GzDecoder::new(sync_reader);
@@ -320,7 +340,8 @@ impl ContainerImageFetcher {
 
             match archive.unpack(&output_dir) {
                 Ok(_) => {
-                    pb.finish_with_message(format!("Done {}", &digest_for_closure));
+                    pb.finish_with_message(format!("✅ Done {}", &digest_for_closure));
+                    fs::write(marker_file, "").context("Failed to write completion marker")?;
                     Ok(())
                 }
                 Err(e) => Err(e).context(format!(
