@@ -18,7 +18,7 @@ provision:
       set -eux -o pipefail
       apt-get update
       apt-get install -y procps
-      sudo apt install debootstrap
-      sudo mkdir /ubuntu-fs
-      sudo debootstrap --arch arm64 jammy /ubuntu-fs http://ports.ubuntu.com/ubuntu-ports
-      sudo touch /ubuntu-fs/root/CONTAINER_ROOT
+      # sudo apt install debootstrap
+      # sudo mkdir /ubuntu-fs
+      # sudo debootstrap --arch arm64 jammy /ubuntu-fs http://ports.ubuntu.com/ubuntu-ports
+      # sudo touch /ubuntu-fs/root/CONTAINER_ROOT
