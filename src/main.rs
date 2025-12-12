@@ -5,6 +5,7 @@ mod container;
 mod errors;
 mod layers;
 mod run;
+mod runtime;
 mod sys;
 
 use errors::{EXIT_INSUFFICIENT_ARGS, EXIT_INVALID_ARG};
