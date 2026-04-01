@@ -13,8 +13,9 @@ pub fn create(id: &str, bundle: &str) -> Result<()> {
         anyhow::bail!("config.json not found in bundle: {}", bundle);
     }
 
-    let _spec = crate::runtime::spec::RuntimeSpec::load_config(bundle)
+    let spec = crate::runtime::spec::RuntimeSpec::load_config(bundle)
         .context("failed to load config.json")?;
+    spec.validate().context("spec validation failed")?;
 
     let state = ContainerState {
         version: "1.0.2".into(),
