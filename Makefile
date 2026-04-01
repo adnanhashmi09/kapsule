@@ -5,7 +5,7 @@ BUILD_DIR=build
 TARGET=aarch64-unknown-linux-musl
 DOCKER_CONTAINER=rust-build-env
 
-.PHONY: all clean build docker-start docker-stop docker-shell bundle
+.PHONY: all clean build docker-start docker-stop docker-shell bundle install
 
 all: clean build
 
@@ -63,22 +63,12 @@ run: bundle
 
 bundle:
 	@limactl shell $(VM_NAME) sudo mkdir -p /root/bundle/rootfs
-	@limactl shell $(VM_NAME) sudo tee /root/bundle/config.json > /dev/null << 'EOFBUNDLE'
-{
-  "ociVersion": "1.0.2",
-  "root": {
-    "path": "rootfs",
-    "readonly": false
-  },
-  "process": {
-    "terminal": false,
-    "cwd": "/",
-    "env": ["PATH=/usr/local/sbin:/usr/local/bin:/bin:/usr/bin:/sbin:/usr/sbin"],
-    "args": ["/bin/sh", "-c", "echo hello"]
-  },
-  "hostname": "container"
-}
-EOFBUNDLE
+	@limactl shell $(VM_NAME) sudo /bin/sh -c 'printf "%s\n" '\''{"ociVersion": "1.0.2", "root": {"path": "rootfs", "readonly": false}, "process": {"terminal": false, "cwd": "/", "env": ["PATH=/usr/local/sbin:/usr/local/bin:/bin:/usr/bin:/sbin:/usr/sbin"], "args": ["/bin/sh", "-c", "echo hello"]}, "hostname": "container"}'\'' > /root/bundle/config.json'
+	@echo "Bundle created"
+
+install:
+	@sudo cp $(BUILD_DIR)/$(BINARY_NAME) /usr/local/bin/kapsule
+	@sudo chmod +x /usr/local/bin/kapsule
 
 shell:
 	@limactl shell $(VM_NAME) sudo su -
