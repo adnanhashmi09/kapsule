@@ -505,8 +505,27 @@ vm-rootfs:
 
 ## Known Limitations & TODOs
 
+### Namespace Implementations (Incomplete)
+
+The following Linux namespaces are **not yet implemented**:
+
+| Namespace | Flag | Status | Notes |
+|-----------|------|--------|-------|
+| UTS | `CLONE_NEWUTS` | ✅ Implemented | `set_hostname()` — hostname/domainname isolation |
+| PID | `CLONE_NEWPID` | ✅ Implemented | `wait_for_child()` — PID namespace (PID 1 inside container) |
+| Mount | `CLONE_NEWNS` | ✅ Implemented | `setup_mounts()` — chroot, /proc, /sys mounts |
+| IPC | `CLONE_NEWIPC` | ⚠️ Partial | Automatic via clone flag, but no message queue or semaphore cleanup |
+| **Network** | `CLONE_NEWNET` | ❌ Not implemented | No network namespace setup, no veth pairs, no eth0 inside container |
+| **User** | `CLONE_NEWUSER` | ❌ Not implemented | No user namespace mapping (UID/GID translation) |
+| **Cgroup** | `CLONE_NEWCGROUP` | ❌ Not implemented | No cgroup namespace isolation |
+
+### Command Implementations (Stubbed)
+
 1. **`kill` is stubbed** — No actual signal is sent to the container process
 2. **`pause`/`resume` are stubbed** — Only update state, no cgroup/signal suspension
+
+### Other TODOs
+
 3. **No image pull integration** — `ContainerImageFetcher` exists but is unused; `create` only validates bundle
 4. **No proper OCI image layout** — Extracted layers go to `./extracted_layers/<digest>/` instead of OCI layout
 5. **`hostname`/`cwd` should be required fields** — Currently `Option<String>` but treated as required
@@ -522,4 +541,9 @@ vm-rootfs:
 | M1 | ✅ Done | OCI Runtime CLI (create/start/state/kill/delete/pause/resume) |
 | M2 | ✅ Done | RuntimeSpec expansion (OCI fields: linux, hooks, mounts, etc.) |
 | M3 | ✅ Done | Container state management + pidfile |
-| M4 | ✅ Done | Namespace isolation module structure |
+| M4 | ✅ Done | Namespace isolation (UTS, PID, Mount, IPC — basic) |
+| M5 | 📋 TODO | Network namespace (veth pairs, container eth0) |
+| M5 | 📋 TODO | User namespace (UID/GID mapping) |
+| M5 | 📋 TODO | Cgroup namespace (resource limits) |
+| M5 | 📋 TODO | `kill` command (actual signal sending) |
+| M5 | 📋 TODO | `pause`/`resume` (cgroup freezing) |
