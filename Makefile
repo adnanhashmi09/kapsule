@@ -5,7 +5,7 @@ BUILD_DIR=build
 TARGET=aarch64-unknown-linux-musl
 DOCKER_CONTAINER=rust-build-env
 
-.PHONY: all clean build docker-start docker-stop docker-shell bundle install
+.PHONY: all clean build docker-start docker-stop docker-shell bundle install vm-rootfs
 
 all: clean build
 
@@ -60,11 +60,28 @@ nsenter-host:
 
 run: bundle
 	@limactl shell $(VM_NAME) sudo -i $(PWD)/build/$(BINARY_NAME) create container_id_abcded /root/bundle/
+	@limactl shell $(VM_NAME) sudo -i $(PWD)/build/$(BINARY_NAME) start container_id_abcded
 
-bundle:
-	@limactl shell $(VM_NAME) sudo mkdir -p /root/bundle/rootfs
-	@limactl shell $(VM_NAME) sudo /bin/sh -c 'printf "%s\n" '\''{"ociVersion": "1.0.2", "root": {"path": "rootfs", "readonly": false}, "process": {"terminal": false, "cwd": "/", "env": ["PATH=/usr/local/sbin:/usr/local/bin:/bin:/usr/bin:/sbin:/usr/sbin"], "args": ["/bin/sh", "-c", "echo hello"]}, "hostname": "container"}'\'' > /root/bundle/config.json'
-	@echo "Bundle created"
+# Setup Ubuntu rootfs for container using debootstrap, then write config.json
+# If rootfs already exists, skips bootstrap and just writes/overwrites config.json
+vm-rootfs:
+	@echo "Checking if rootfs needs bootstrapping..."
+	@limactl shell $(VM_NAME) sudo /bin/sh -c 'if [ ! -d /root/bundle/rootfs/usr ] || [ -z "$$(ls -A /root/bundle/rootfs/usr 2>/dev/null)" ]; then \
+		echo "Rootfs missing or empty, bootstrapping with debootstrap..."; \
+		apt-get update -qq && apt-get install -y -qq debootstrap; \
+		mkdir -p /root/bundle/rootfs; \
+		debootstrap --arch arm64 noble /root/bundle/rootfs http://ports.ubuntu.com/ubuntu-ports/; \
+		mkdir -p /root/bundle/rootfs/proc /root/bundle/rootfs/sys /root/bundle/rootfs/tmp; \
+		echo "Rootfs bootstrapped successfully"; \
+	else \
+		echo "Rootfs already exists, skipping bootstrap"; \
+	fi'
+	@echo "Writing OCI bundle config.json..."
+	@limactl shell $(VM_NAME) sudo /bin/sh -c 'printf "%s\n" '\''{"ociVersion": "1.0.2", "root": {"path": "rootfs", "readonly": false}, "process": {"terminal": false, "cwd": "/", "env": ["PATH=/usr/local/sbin:/usr/local/bin:/bin:/usr/bin:/sbin:/usr/sbin"], "args": ["/bin/bash", "-i"]}, "hostname": "container"}'\'' > /root/bundle/config.json'
+	@echo "Bundle ready at /root/bundle"
+
+# Alias for backwards compatibility
+bundle: vm-rootfs
 
 install:
 	@sudo cp $(BUILD_DIR)/$(BINARY_NAME) /usr/local/bin/kapsule
