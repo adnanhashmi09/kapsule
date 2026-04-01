@@ -5,7 +5,7 @@ BUILD_DIR=build
 TARGET=aarch64-unknown-linux-musl
 DOCKER_CONTAINER=rust-build-env
 
-.PHONY: all clean build docker-start docker-stop docker-shell
+.PHONY: all clean build docker-start docker-stop docker-shell bundle
 
 all: clean build
 
@@ -52,10 +52,33 @@ vm-stop:
 vm-delete:
 	limactl delete $(VM_NAME)
 
-vm-clean: vm-stop vm-clean
+vm-clean: vm-stop
 
-run:
-	@limactl shell $(VM_NAME) sudo -i $(PWD)/build/$(BINARY_NAME) run /bin/bash
+nsenter-host:
+	docker run -it --privileged --pid=host debian nsenter -t 1 -m -u -n -i sh
+
+
+run: bundle
+	@limactl shell $(VM_NAME) sudo -i $(PWD)/build/$(BINARY_NAME) create container_id_abcded /root/bundle/
+
+bundle:
+	@limactl shell $(VM_NAME) sudo mkdir -p /root/bundle/rootfs
+	@limactl shell $(VM_NAME) sudo tee /root/bundle/config.json > /dev/null << 'EOFBUNDLE'
+{
+  "ociVersion": "1.0.2",
+  "root": {
+    "path": "rootfs",
+    "readonly": false
+  },
+  "process": {
+    "terminal": false,
+    "cwd": "/",
+    "env": ["PATH=/usr/local/sbin:/usr/local/bin:/bin:/usr/bin:/sbin:/usr/sbin"],
+    "args": ["/bin/sh", "-c", "echo hello"]
+  },
+  "hostname": "container"
+}
+EOFBUNDLE
 
 shell:
 	@limactl shell $(VM_NAME) sudo su -

@@ -48,6 +48,8 @@ pub struct Root {
 impl RuntimeSpec {
     pub fn load_config(path: &str) -> Result<RuntimeSpec> {
         let path = Path::new(path);
+        let path = path.join("config.json");
+        println!("{:?}", path);
         let json_str = fs::read_to_string(path)?;
         let spec = serde_json::from_str::<RuntimeSpec>(&json_str)?;
         Ok(spec)
@@ -86,8 +88,7 @@ mod tests {
 
         create_test_bundle(temp_dir.path(), config);
 
-        let spec = RuntimeSpec::load_config(temp_dir.path().join("config.json").to_str().unwrap())
-            .unwrap();
+        let spec = RuntimeSpec::load_config(temp_dir.path().to_str().unwrap()).unwrap();
         assert_eq!(spec.oci_version, "1.0.2");
         assert_eq!(spec.process.args, vec!["/bin/sh"]);
         assert_eq!(spec.process.env, Vec::<String>::new());
