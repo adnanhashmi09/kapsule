@@ -534,6 +534,72 @@ The following Linux namespaces are **not yet implemented**:
 
 ---
 
+## Rootful vs Rootless Architecture
+
+Kapsule uses **runtime detection** (like youki/crun) to support both rootful and rootless containers:
+
+### Detection Logic
+
+```rust
+// Runtime detection: am I running as root?
+fn is_rootless() -> bool {
+    unsafe { libc::geteuid() != 0 }
+}
+```
+
+### Rootful Mode (Docker compatible, runs as root)
+
+```
+docker run → containerd-shim → kapsule (root) → container
+                                    ↑
+                              OCI runtime Shim
+                              CLONE_NEWUTS|PID|NS|IPC|NET
+                              veth pair for networking
+```
+
+**Requirements:**
+- Network namespace (veth pairs)
+- `kill` implementation (sends signals to container process)
+- `pause`/`resume` (cgroup freezing or signals)
+
+### Rootless Mode (Podman compatible, runs as unprivileged user)
+
+```
+podman run → conmon → kapsule --rootless (uid 100000) → container
+                              │
+                         OCI runtime Shim
+                         CLONE_NEWUTS|PID|NS|IPC|NET|USER
+                         slirp4netns for networking
+                         fuse-overlayfs for filesystem
+```
+
+**Requirements:**
+- User namespace (UID/GID mapping) — mandatory
+- slirp4netns for networking (userspace TAP)
+- fuse-overlayfs for filesystem operations
+- No privileged operations
+
+### Key Differences
+
+| Feature | Rootful | Rootless |
+|---------|---------|----------|
+| Network | veth pairs | slirp4netns |
+| Filesystem | mount --bind | fuse-overlayfs |
+| User NS | Optional | Mandatory |
+| Daemon | Optional | None (conmon monitors) |
+| Capabilities | Keep required ones | All via UserNS |
+| Cgroups | Full hierarchy | Delegated subtree |
+
+### Shim Interface (Docker/Podman Compatible)
+
+Both Docker and Podman invoke OCI runtimes through a shim interface. Implementing this allows kapsule to be swapped in for runc:
+
+```
+Docker/Podman → runtime shim socket → kapsule create/start/delete
+```
+
+---
+
 ## Milestones
 
 | Milestone | Status | Description |
@@ -542,8 +608,23 @@ The following Linux namespaces are **not yet implemented**:
 | M2 | ✅ Done | RuntimeSpec expansion (OCI fields: linux, hooks, mounts, etc.) |
 | M3 | ✅ Done | Container state management + pidfile |
 | M4 | ✅ Done | Namespace isolation (UTS, PID, Mount, IPC — basic) |
-| M5 | 📋 TODO | Network namespace (veth pairs, container eth0) |
-| M5 | 📋 TODO | User namespace (UID/GID mapping) |
-| M5 | 📋 TODO | Cgroup namespace (resource limits) |
-| M5 | 📋 TODO | `kill` command (actual signal sending) |
-| M5 | 📋 TODO | `pause`/`resume` (cgroup freezing) |
+| **M5** | 📋 TODO | **Minimum Docker swap-out (rootful)** |
+| | | Network namespace with veth pairs |
+| | | Working `kill` command (send signals to container) |
+| | | `pause`/`resume` via cgroup freeze or SIGSTOP/SIGCONT |
+| | | Shim interface for Docker/Podman invocation |
+| **M6** | 📋 TODO | **Rootless support (like youki)** |
+| | | User namespace (UID/GID mapping, mandatory) |
+| | | slirp4netns integration for rootless networking |
+| | | fuse-overlayfs for rootless filesystem |
+| | | Rootless detection at runtime |
+| **M7** | 📋 TODO | **Production hardening** |
+| | | Capabilities dropping (CAP_NET_ADMIN, etc.) |
+| | | Seccomp filters |
+| | | `/dev` setup (devpts, devshm, mqueue) |
+| | | `pivot_root` instead of `chroot` |
+| | | Cgroup v2 resource limits |
+| | | Prestart/poststop hooks |
+| **Future** | 📋 TODO | Image pull integration |
+| | | OCI image layout |
+| | | Cgroup namespace |
