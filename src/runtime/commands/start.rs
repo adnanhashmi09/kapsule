@@ -13,10 +13,12 @@ pub fn start(id: &str) -> Result<()> {
     }
 
     // STUB: actual process spawning happens in Milestone 4
+    let pid = std::process::id();
     state.status = Status::Running;
-    state.pid = std::process::id();
+    state.pid = pid;
 
     StateManager::save(&state)?;
+    StateManager::write_pidfile(id, pid)?;
 
     println!("started");
     Ok(())

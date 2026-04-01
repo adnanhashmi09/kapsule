@@ -1,18 +1,18 @@
 pub mod create;
-pub mod start;
-pub mod state_cmd;
-pub mod kill;
 pub mod delete;
+pub mod kill;
 pub mod pause;
 pub mod resume;
+pub mod start;
+pub mod state_cmd;
 
 pub use create::create;
-pub use start::start;
-pub use state_cmd::state;
-pub use kill::kill;
 pub use delete::delete;
+pub use kill::kill;
 pub use pause::pause;
 pub use resume::resume;
+pub use start::start;
+pub use state_cmd::state;
 
 use crate::runtime::cli::Command;
 use anyhow::Result;

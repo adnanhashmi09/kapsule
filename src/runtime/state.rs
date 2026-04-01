@@ -53,6 +53,17 @@ impl StateManager {
         Self::container_dir(id).join("state.json")
     }
 
+    pub fn pid_file(id: &str) -> PathBuf {
+        Self::container_dir(id).join("pidfile")
+    }
+
+    pub fn write_pidfile(id: &str, pid: u32) -> anyhow::Result<()> {
+        let path = Self::pid_file(id);
+        fs::write(&path, pid.to_string())
+            .map_err(|e| anyhow::anyhow!("failed to write pidfile {}: {}", path.display(), e))?;
+        Ok(())
+    }
+
     pub fn load(id: &str) -> anyhow::Result<ContainerState> {
         let path = Self::state_file(id);
         let json = fs::read_to_string(&path)
@@ -125,6 +136,10 @@ mod tests {
         assert_eq!(
             StateManager::state_file("mycontainer"),
             PathBuf::from("/run/kapsule/mycontainer/state.json")
+        );
+        assert_eq!(
+            StateManager::pid_file("mycontainer"),
+            PathBuf::from("/run/kapsule/mycontainer/pidfile")
         );
     }
 }
